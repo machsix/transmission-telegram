@@ -14,7 +14,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/pyed/tailer"
-	"github.com/pyed/transmission"
+	"github.com/machsix/transmission"
 	"gopkg.in/telegram-bot-api.v4"
 )
 
@@ -113,6 +113,8 @@ var (
 	LogFile      string
 	TransLogFile string // Transmission log file
 	NoLive       bool
+	PrivateOnly  bool
+	DownLoadDir  string
 
 	// transmission
 	Client *transmission.TransmissionClient
@@ -177,6 +179,8 @@ func init() {
 	flag.StringVar(&LogFile, "logfile", "", "Send logs to a file")
 	flag.StringVar(&TransLogFile, "transmission-logfile", "", "Open transmission logfile to monitor torrents completion")
 	flag.BoolVar(&NoLive, "no-live", false, "Don't edit and update info after sending")
+	flag.BoolVar(&PrivateOnly, "private", false, "Only receive message from private chat")
+	flag.StringVar(&DownLoadDir, "dir","", "Download directory")
 
 	// set the usage message
 	flag.Usage = func() {
@@ -305,6 +309,12 @@ func main() {
 			continue
 		}
 
+		// channel message
+		if PrivateOnly && !update.Message.Chat.IsPrivate() {
+			logger.Printf("[INFO] Ignored a message from channel/group")
+			continue
+		}
+
 		// update chatID for complete notification
 		if TransLogFile != "" && chatID != update.Message.Chat.ID {
 			chatID = update.Message.Chat.ID
@@ -323,79 +333,79 @@ func main() {
 		command := strings.ToLower(tokens[0])
 
 		switch command {
-		case "list", "/list", "li", "/li":
+		case "/list", "/li":
 			go list(update, tokens[1:])
 
-		case "head", "/head", "he", "/he":
+		case "/head", "/he":
 			go head(update, tokens[1:])
 
-		case "tail", "/tail", "ta", "/ta":
+		case "/tail", "/ta":
 			go tail(update, tokens[1:])
 
-		case "downs", "/downs", "dl", "/dl":
+		case "/downs", "/dl":
 			go downs(update)
 
-		case "seeding", "/seeding", "sd", "/sd":
+		case "/seeding", "/sd":
 			go seeding(update)
 
-		case "paused", "/paused", "pa", "/pa":
+		case "/paused", "/pa":
 			go paused(update)
 
-		case "checking", "/checking", "ch", "/ch":
+		case "/checking", "/ch":
 			go checking(update)
 
-		case "active", "/active", "ac", "/ac":
+		case "/active", "/ac":
 			go active(update)
 
-		case "errors", "/errors", "er", "/er":
+		case "/errors", "/er":
 			go errors(update)
 
-		case "sort", "/sort", "so", "/so":
+		case "/sort", "/so":
 			go sort(update, tokens[1:])
 
-		case "trackers", "/trackers", "tr", "/tr":
+		case "/trackers", "/tr":
 			go trackers(update)
 
-		case "add", "/add", "ad", "/ad":
+		case "/add", "/ad":
 			go add(update, tokens[1:])
 
-		case "search", "/search", "se", "/se":
+		case "/search", "/se":
 			go search(update, tokens[1:])
 
-		case "latest", "/latest", "la", "/la":
+		case "/latest", "/la":
 			go latest(update, tokens[1:])
 
-		case "info", "/info", "in", "/in":
+		case "/info", "/in":
 			go info(update, tokens[1:])
 
-		case "stop", "/stop", "sp", "/sp":
+		case "/stop", "/sp":
 			go stop(update, tokens[1:])
 
-		case "start", "/start", "st", "/st":
+		case "/start", "/st":
 			go start(update, tokens[1:])
 
-		case "check", "/check", "ck", "/ck":
+		case "/check", "/ck":
 			go check(update, tokens[1:])
 
-		case "stats", "/stats", "sa", "/sa":
+		case "/stats", "/sa":
 			go stats(update)
 
-		case "speed", "/speed", "ss", "/ss":
+		case "/speed", "/ss":
 			go speed(update)
 
-		case "count", "/count", "co", "/co":
+		case "/count", "/co":
 			go count(update)
 
-		case "del", "/del":
+		case "/del":
 			go del(update, tokens[1:])
 
-		case "deldata", "/deldata":
+		case "/deldata":
 			go deldata(update, tokens[1:])
 
-		case "help", "/help":
+		case "/help":
 			go send(HELP, update.Message.Chat.ID, true)
 
-		case "version", "/version":
+		case "/version":
 			go getVersion(update)
 
 		case "":
@@ -404,8 +414,8 @@ func main() {
 
 		default:
 			// no such command, try help
-			go send("No such command, try /help", update.Message.Chat.ID, false)
-
+			// go send("No such command, try /help", update.Message.Chat.ID, false)
+			go addMagnetOrTorrent(update)
 		}
 	}
 }
@@ -960,6 +970,9 @@ func add(ud tgbotapi.Update, tokens []string) {
 	// loop over the URL/s and add them
 	for _, url := range tokens {
 		cmd := transmission.NewAddCmdByURL(url)
+		if (DownLoadDir != "") {
+			cmd = transmission.NewAddCmdByURLWithDir(url, DownLoadDir)
+		}
 
 		torrent, err := Client.ExecuteAddCommand(cmd)
 		if err != nil {
@@ -994,6 +1007,30 @@ func receiveTorrent(ud tgbotapi.Update) {
 
 	// add by file URL
 	add(ud, []string{file.Link(BotToken)})
+}
+
+// add torrent files in entities or explict magnet link
+func addMagnetOrTorrent(ud tgbotapi.Update) {
+	var tokens []string
+	if ud.Message.Entities != nil {
+		for idx := 0; idx < len(*ud.Message.Entities); idx++ {
+			entity := (*ud.Message.Entities)[idx]
+			if entity.URL != "" && strings.ToLower(entity.URL[len(entity.URL)-8:]) == ".torrent" {
+				tokens = append(tokens, entity.URL)
+			}
+		}
+	}	
+	
+	if len(tokens) == 0 && strings.Contains(ud.Message.Text, "magnet:") {
+		r, _ := regexp.Compile("magnet:\\?xt=urn:[a-zA-Z0-9]+:[a-zA-Z0-9]{32,40}(&dn=.+&tr=.+)?")
+		tokens = r.FindAllString(ud.Message.Text, -1)
+  }
+	if len(tokens) > 0 {
+		add(ud, tokens)
+	} else {
+		send(ud.Message.Text, ud.Message.Chat.ID, false)
+		send("*addMagenetOrTorrent:* no torrent files or magnet links found", ud.Message.Chat.ID, false)
+	}
 }
 
 // search takes a query and returns torrents with match
