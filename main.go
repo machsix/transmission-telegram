@@ -22,6 +22,12 @@ const (
 	VERSION = "v1.4"
 
 	HELP = `
+	**/setdir**
+	Set relative directory for download
+
+	**/getdir**
+	Get current download directory
+	
 	**/list**
 	Lists all the torrents, takes an optional argument which is a query to list only torrents that has a tracker matches the query, or some of it.
 
@@ -39,6 +45,7 @@ const (
 
 	**/paused**
 	Lists _Paused_ torrents.
+
 
 	**/checking**
 	Lists torrents with the status of _Verifying_ or in the queue to verify.
@@ -114,7 +121,7 @@ var (
 	NoLive       bool
 	PrivateOnly  bool
 	DownLoadDir  string
-
+  RootDir      string
 	// transmission
 	Client *transmission.TransmissionClient
 
@@ -179,7 +186,8 @@ func init() {
 	flag.StringVar(&TransLogFile, "transmission-logfile", "", "Open transmission logfile to monitor torrents completion")
 	flag.BoolVar(&NoLive, "no-live", false, "Don't edit and update info after sending")
 	flag.BoolVar(&PrivateOnly, "private", false, "Only receive message from private chat")
-	flag.StringVar(&DownLoadDir, "dir","", "Download directory")
+	flag.StringVar(&DownLoadDir, "dir","", "Download directory, if not specificed, rootdir will be used")
+	flag.StringVar(&RootDir, "rootdir","/var/lib/transmission-daemon/Downloads", "Root of download directory")
 
 	// set the usage message
 	flag.Usage = func() {
@@ -320,13 +328,17 @@ func main() {
 		}
 
 		// tokenize the update
-		tokens := strings.Fields(update.Message.Text)
+		tokens := []string{""}
+		if update.Message.Text != "" {
+			tokens = strings.Fields(update.Message.Text)
 
-		// preprocess message based on URL schema
-		// in case those were added from the mobile via "Share..." option
-		// when it is not possible to easily prepend it with "add" command
-		if strings.HasPrefix(tokens[0], "magnet") || strings.HasPrefix(tokens[0], "http") {
-			tokens = append([]string{"/add"}, tokens...)
+			// preprocess message based on URL schema
+			// in case those were added from the mobile via "Share..." option
+			// when it is not possible to easily prepend it with "add" command
+			
+			if strings.HasPrefix(tokens[0], "magnet") || strings.HasPrefix(tokens[0], "http") {
+				tokens = append([]string{"/add"}, tokens...)
+			}
 		}
 
 		command := strings.ToLower(tokens[0])
@@ -334,6 +346,12 @@ func main() {
 		switch command {
 		case "/list":
 			go list(update, tokens[1:])
+
+		case "/setdir":
+			go setdir(update, tokens[1])
+
+		case "/getdir":
+			go getdir(update)
 
 		case "/head":
 			go head(update, tokens[1:])
@@ -417,6 +435,15 @@ func main() {
 			go addMagnetOrTorrent(update)
 		}
 	}
+}
+
+func setdir(ud tgbotapi.Update, dir string) {
+	DownLoadDir = RootDir + "/" + dir
+	send("**setdir:** "+DownLoadDir, ud.Message.Chat.ID, true)
+}
+
+func getdir(ud tgbotapi.Update) {
+	send(fmt.Sprintf("**getdir:**\nRootDir: %s\nDownLoadDir: %s",RootDir, DownLoadDir), ud.Message.Chat.ID, true)
 }
 
 // list will form and send a list of all the torrents
@@ -959,6 +986,14 @@ func trackers(ud tgbotapi.Update) {
 	send(buf.String(), ud.Message.Chat.ID, false)
 }
 
+func testLink(url string) bool {
+	if strings.HasPrefix(url, "magnet") || strings.HasPrefix(url, "http") {
+		return true
+	} else {
+		return false
+	}
+}
+
 // add takes an URL to a .torrent file to add it to transmission
 func add(ud tgbotapi.Update, tokens []string) {
 	if len(tokens) == 0 {
@@ -967,27 +1002,34 @@ func add(ud tgbotapi.Update, tokens []string) {
 	}
 
 	// loop over the URL/s and add them
-	for _, url := range tokens {
-		cmd := transmission.NewAddCmdByURL(url)
-		if (DownLoadDir != "") {
-			cmd = transmission.NewAddCmdByURLWithDir(url, DownLoadDir)
-		}
+	for idx, url := range tokens {
+		if testLink(url) {
+			var cmd *transmission.Command 
+			if (len(tokens) > idx+1 && !testLink(tokens[idx+1])) {
+				cmd = transmission.NewAddCmdByURLWithDir(url, RootDir+"/"+tokens[idx+1])
+			} else {
+				cmd = transmission.NewAddCmdByURL(url)
+				if (DownLoadDir != "") {
+					cmd = transmission.NewAddCmdByURLWithDir(url, DownLoadDir)
+				}
+			}
 
-		torrent, err := Client.ExecuteAddCommand(cmd)
-		if err != nil && err != transmission.ErrTorrentDuplicate {
-			send("**add:** "+err.Error(), ud.Message.Chat.ID, true)
-			continue
-		}
+			torrent, err := Client.ExecuteAddCommand(cmd)
+			if err != nil && err != transmission.ErrTorrentDuplicate {
+				send("**add:** "+err.Error(), ud.Message.Chat.ID, true)
+				continue
+			}
 
-		// check if torrent.Name is empty, then an error happened
-		if torrent.Name == "" {
-			send("**add:** error adding "+url, ud.Message.Chat.ID, true)
-			continue
-		}
-		if err == nil {
-			send(fmt.Sprintf("**Added:** <%d> %s", torrent.ID, torrent.Name), ud.Message.Chat.ID, true)
-		} else {
-			send(fmt.Sprintf("**Duplicated:** <%d> %s", torrent.ID, torrent.Name), ud.Message.Chat.ID, true)
+			// check if torrent.Name is empty, then an error happened
+			if torrent.Name == "" {
+				send("**add:** error adding "+url, ud.Message.Chat.ID, true)
+				continue
+			}
+			if err == nil {
+				send(fmt.Sprintf("**Added:** <%d> %s", torrent.ID, torrent.Name), ud.Message.Chat.ID, true)
+			} else {
+				send(fmt.Sprintf("**Duplicated:** <%d> %s", torrent.ID, torrent.Name), ud.Message.Chat.ID, true)
+			}
 		}
 	}
 }
@@ -997,7 +1039,6 @@ func receiveTorrent(ud tgbotapi.Update) {
 	if ud.Message.Document == nil {
 		return // has no document
 	}
-
 	// get the file ID and make the config
 	fconfig := tgbotapi.FileConfig{
 		FileID: ud.Message.Document.FileID,
