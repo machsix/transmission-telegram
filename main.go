@@ -212,6 +212,10 @@ func init() {
 		os.Exit(1)
 	}
 
+	if (DownLoadDir == "") {
+		DownLoadDir = RootDir;
+	}
+
 	// make sure that the handler doesn't contain @
 	for i := range Masters {
 		Masters[i] = strings.Replace(Masters[i], "@", "", -1)
@@ -348,7 +352,11 @@ func main() {
 			go list(update, tokens[1:])
 
 		case "/setdir":
-			go setdir(update, tokens[1])
+			if len(tokens) == 1 {
+			  go setdirasroot(update)
+			} else {
+			  go setdir(update, tokens[1])
+			}
 
 		case "/getdir":
 			go getdir(update)
@@ -439,6 +447,11 @@ func main() {
 
 func setdir(ud tgbotapi.Update, dir string) {
 	DownLoadDir = RootDir + "/" + dir
+	send("**setdir:** "+DownLoadDir, ud.Message.Chat.ID, true)
+}
+
+func setdirasroot(ud tgbotapi.Update) {
+	DownLoadDir = RootDir
 	send("**setdir:** "+DownLoadDir, ud.Message.Chat.ID, true)
 }
 
