@@ -120,6 +120,7 @@ var (
 	TransLogFile string // Transmission log file
 	NoLive       bool
 	PrivateOnly  bool
+	Verbose      bool
 	DownLoadDir  string
   RootDir      string
 	// transmission
@@ -186,6 +187,7 @@ func init() {
 	flag.StringVar(&TransLogFile, "transmission-logfile", "", "Open transmission logfile to monitor torrents completion")
 	flag.BoolVar(&NoLive, "no-live", false, "Don't edit and update info after sending")
 	flag.BoolVar(&PrivateOnly, "private", false, "Only receive message from private chat")
+	flag.BoolVar(&Verbose, "verbose", false, "Verbose logging")
 	flag.StringVar(&DownLoadDir, "dir","", "Download directory, if not specificed, rootdir will be used")
 	flag.StringVar(&RootDir, "rootdir","/var/lib/transmission-daemon/Downloads", "Root of download directory")
 
@@ -316,13 +318,17 @@ func main() {
 
 		// ignore non masters
 		if !Masters.Contains(update.Message.From.UserName) {
-			logger.Printf("[INFO] Ignored a message from: %s", update.Message.From.String())
+			if Verbose {
+				logger.Printf("[INFO] Ignored a message from: %s", update.Message.From.String())
+			}
 			continue
 		}
 
 		// channel message
 		if PrivateOnly && !update.Message.Chat.IsPrivate() {
-			logger.Printf("[INFO] Ignored a message from channel/group")
+			if Verbose {
+				logger.Printf("[INFO] Ignored a message from channel/group")
+			}
 			continue
 		}
 
